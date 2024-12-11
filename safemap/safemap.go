@@ -23,11 +23,11 @@ func NewSafeMap[T any]() Map[T] {
 
 // Get retrieves the value associated with the given key from the map.
 // It returns the value and a boolean indicating whether the key was present.
-func (m *Map[T]) Get(key string) (T, bool) {
+func (m *Map[T]) Get(key any) (T, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	val, ok := m.items[key]
+	val, ok := m.items[getKey(key)]
 
 	return val, ok
 }
