@@ -33,14 +33,15 @@ type Cache[T any] struct {
 }
 
 type Config struct {
-	File             string
-	DefaultTTL       time.Duration
-	FlushInterval    time.Duration
-	CleanupInterval  time.Duration
-	FlushImmediately bool
-	Debug            bool
-	NATSURL          string
-	NATSBucket       string
+	File               string
+	DefaultTTL         time.Duration
+	FlushInterval      time.Duration
+	CleanupInterval    time.Duration
+	FlushImmediately   bool
+	Debug              bool
+	NATSURL            string
+	NATSBucket         string
+	RefreshTTLOnAccess bool
 }
 
 // New creates a new Cache, optionally initializing from a file and setting a default TTL.
@@ -259,11 +260,40 @@ func (c *Cache[T]) Edit(key string, editFunc func(T) T) error {
 func (c *Cache[T]) Get(key string) (T, bool) {
 	c.mu.RLock()
 	item, found := c.items[key]
-	c.mu.RUnlock()
-
 	if found && (item.Expiration == 0 || time.Now().UnixNano() <= item.Expiration) {
+		c.mu.RUnlock()
+
+		// If RefreshTTLOnAccess is enabled and the item has an expiration time,
+		// update the expiration time
+		if c.cfg.RefreshTTLOnAccess && item.Expiration > 0 {
+			c.mu.Lock()
+			// Recalculate TTL based on the original TTL duration
+			originalTTL := time.Duration(item.Expiration - time.Now().UnixNano())
+			if originalTTL <= 0 {
+				// Use default TTL if the item was about to expire
+				originalTTL = c.defaultTTL
+			}
+
+			// Update expiration time
+			item.Expiration = time.Now().Add(originalTTL).UnixNano()
+			c.items[key] = item
+
+			// Sync with NATS if configured
+			if c.natsKV != nil {
+				_ = c.syncWithNATS(key, item) // Ignore error to not affect the get operation
+			}
+
+			// Flush to file if immediate flushing is enabled
+			if c.cfg.FlushImmediately {
+				_ = c.flushToFileFunc(true) // Ignore error to not affect the get operation
+			}
+
+			c.mu.Unlock()
+		}
+
 		return item.Value, true
 	}
+	c.mu.RUnlock()
 
 	// Try to fetch from NATS if not found locally or expired
 	if c.natsKV != nil {
@@ -273,6 +303,24 @@ func (c *Cache[T]) Get(key string) (T, bool) {
 			if err := gob.NewDecoder(bytes.NewReader(entry.Value())).Decode(&natsItem); err == nil {
 				if natsItem.Expiration == 0 || time.Now().UnixNano() <= natsItem.Expiration {
 					c.mu.Lock()
+
+					// If RefreshTTLOnAccess is enabled and the item has an expiration time,
+					// update the expiration time
+					if c.cfg.RefreshTTLOnAccess && natsItem.Expiration > 0 {
+						// Calculate the original TTL
+						originalTTL := time.Duration(natsItem.Expiration - time.Now().UnixNano())
+						if originalTTL <= 0 {
+							// Use default TTL if the item was about to expire
+							originalTTL = c.defaultTTL
+						}
+
+						// Update expiration time
+						natsItem.Expiration = time.Now().Add(originalTTL).UnixNano()
+
+						// Sync with NATS
+						_ = c.syncWithNATS(key, natsItem) // Ignore error to not affect the get operation
+					}
+
 					c.items[key] = natsItem
 					c.mu.Unlock()
 					return natsItem.Value, true

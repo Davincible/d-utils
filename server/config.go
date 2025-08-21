@@ -35,6 +35,36 @@ type ServerConfig struct {
 
 	// customMiddleware contains additional middleware to be added to the server
 	customMiddleware []func(http.Handler) http.Handler
+
+	// enableProfiling enables pprof debugging endpoints
+	enableProfiling bool
+
+	// enableGzip enables gzip compression for responses
+	enableGzip bool
+
+	// enableBrotli enables brotli compression for responses
+	enableBrotli bool
+
+	// brotliLevel sets the compression level for brotli (1-11, default: 4)
+	brotliLevel int
+
+	// enableHealthCheck enables the health check endpoint
+	enableHealthCheck bool
+
+	// healthCheckPath customizes the health check endpoint path (default: /health)
+	healthCheckPath string
+
+	// shutdownTimeout is the maximum duration to wait for server shutdown
+	shutdownTimeout time.Duration
+
+	// idleTimeout is the maximum amount of time to wait for the next request
+	idleTimeout time.Duration
+
+	// keepAliveTimeout is the duration to keep connections alive
+	keepAliveTimeout time.Duration
+
+	// maxHeaderBytes controls the maximum number of bytes the server will read parsing the request header
+	maxHeaderBytes int
 }
 
 // ServerOption defines a functional option for configuring the server
@@ -42,11 +72,17 @@ type ServerOption func(*ServerConfig)
 
 // Default configuration values
 const (
-	defaultAddr           = ":8080"
-	defaultReadTimeout    = 5 * time.Second
-	defaultWriteTimeout   = 5 * time.Second
-	defaultMaxRequestSize = 10 << 20 // 10 MB
-	defaultTimeout        = 60 * time.Second
+	defaultAddr             = ":8080"
+	defaultReadTimeout      = 5 * time.Second
+	defaultWriteTimeout     = 5 * time.Second
+	defaultMaxRequestSize   = 10 << 20 // 10 MB
+	defaultTimeout          = 60 * time.Second
+	defaultShutdownTimeout  = 30 * time.Second
+	defaultIdleTimeout      = 120 * time.Second
+	defaultKeepAliveTimeout = 60 * time.Second
+	defaultMaxHeaderBytes   = 1 << 20 // 1 MB
+	defaultHealthCheckPath  = "/health"
+	defaultBrotliLevel      = 4 // Default Brotli compression level
 )
 
 // WithAddr sets the server address
@@ -85,17 +121,17 @@ func WithCORS(options *cors.Options) ServerOption {
 	}
 }
 
-// WithMetrics enables or disables Prometheus metrics
-func WithMetrics(enable bool) ServerOption {
+// WithMetrics enables Prometheus metrics
+func WithMetrics() ServerOption {
 	return func(c *ServerConfig) {
-		c.enableMetrics = enable
+		c.enableMetrics = true
 	}
 }
 
-// WithLogger enables or disables the chi logger middleware
-func WithLogger(enable bool) ServerOption {
+// WithLogger enables the chi logger middleware
+func WithLogger() ServerOption {
 	return func(c *ServerConfig) {
-		c.enableLogger = enable
+		c.enableLogger = true
 	}
 }
 
@@ -136,12 +172,82 @@ func WithCorsHeaders(headers []string) ServerOption {
 	}
 }
 
-// WithCorsCredentials sets whether CORS requests can include credentials
-func WithCorsCredentials(allow bool) ServerOption {
+// WithCorsCredentials enables CORS credentials
+func WithCorsCredentials() ServerOption {
 	return func(c *ServerConfig) {
 		if c.corsOptions == nil {
 			c.corsOptions = &cors.Options{}
 		}
-		c.corsOptions.AllowCredentials = allow
+		c.corsOptions.AllowCredentials = true
+	}
+}
+
+// WithProfiling enables pprof debugging endpoints
+func WithProfiling() ServerOption {
+	return func(c *ServerConfig) {
+		c.enableProfiling = true
+	}
+}
+
+// WithGzip enables gzip compression
+func WithGzip() ServerOption {
+	return func(c *ServerConfig) {
+		c.enableGzip = true
+	}
+}
+
+// WithBrotli enables brotli compression with optional compression level
+func WithBrotli(level ...int) ServerOption {
+	return func(c *ServerConfig) {
+		c.enableBrotli = true
+		if len(level) > 0 {
+			// Ensure level is between 1 and 11
+			if level[0] < 1 {
+				level[0] = 1
+			} else if level[0] > 11 {
+				level[0] = 11
+			}
+			c.brotliLevel = level[0]
+		} else {
+			c.brotliLevel = defaultBrotliLevel
+		}
+	}
+}
+
+// WithHealthCheck configures the health check endpoint with optional custom path
+func WithHealthCheck(path ...string) ServerOption {
+	return func(c *ServerConfig) {
+		c.enableHealthCheck = true
+		if len(path) > 0 && path[0] != "" {
+			c.healthCheckPath = path[0]
+		}
+	}
+}
+
+// WithShutdownTimeout sets the maximum duration to wait for server shutdown
+func WithShutdownTimeout(timeout time.Duration) ServerOption {
+	return func(c *ServerConfig) {
+		c.shutdownTimeout = timeout
+	}
+}
+
+// WithIdleTimeout sets the maximum duration to wait for the next request
+func WithIdleTimeout(timeout time.Duration) ServerOption {
+	return func(c *ServerConfig) {
+		c.idleTimeout = timeout
+	}
+}
+
+// WithKeepAliveTimeout sets the duration to keep connections alive
+func WithKeepAliveTimeout(timeout time.Duration) ServerOption {
+	return func(c *ServerConfig) {
+		c.keepAliveTimeout = timeout
+	}
+}
+
+// WithMaxHeaderBytes sets the maximum number of bytes for request headers
+func WithMaxHeaderBytes(bytes int) ServerOption {
+	return func(c *ServerConfig) {
+		c.maxHeaderBytes = bytes
 	}
 }
